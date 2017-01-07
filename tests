@@ -1,0 +1,74 @@
+#!/bin/bash
+
+TEST_RUN=0 TEST_FAIL=0
+function test_record() { # message
+  if [[ $? = 0 ]]; then
+    let TEST_RUN++
+    echo -n .
+  else
+    let TEST_RUN++
+    let TEST_FAIL++
+    echo .
+    echo "$1"
+  fi
+}
+
+function expect_equal() { # message expected actual
+  [[ "$2" = "$3" ]]; test_record "$1: expected '$2' but got '$3'"
+}
+
+###################################################################################################
+
+source "$(dirname "$0")/aws-session"
+
+### call
+
+function _reply_return() { REPLY="$1"; return $2; }
+function _reply_return_indirect { call REPLY=_reply_return "($1)" "$(( $2 + 1))"; }
+function test_call() {
+  local foo=prev value=' " result * `date`'
+  call foo=_reply_return "$value" 23
+  expect_equal "return code" 23 $?
+  expect_equal "return value" "$value" "$foo"
+
+  call foo=_reply_return_indirect "text" 42
+  expect_equal "return code" 43 $?
+  expect_equal "return value" "(text)" "$foo"
+}
+test_call
+
+### basenm / dirnm
+
+function test_basename_dirname() {
+  local actual expected actual_rc expected_rc
+  expected="$(command basename "$1")"; expected_rc=$?
+  call actual=basenm "$1"; actual_rc=$?
+  expect_equal "basename '$1' output" "$expected" "$actual"
+  expect_equal "basename '$1' rc" "$expected_rc" "$actual_rc"
+
+  expected="$(command dirname "$1")"; expected_rc=$?
+  call actual=dirnm "$1"; actual_rc=$?
+  expect_equal "dirname '$1' output" "$expected" "$actual"
+  expect_equal "dirname '$1' rc" "$expected_rc" "$actual_rc"
+}
+
+for t in /aaa/bbb/  /  //  /aaa  aaa  aaa/  aaa/xxx  aaa//  a//b//c//  ''; do
+  test_basename_dirname "$t"
+done
+
+### parse_utciso
+
+function test_parse_utciso() {
+  parse_utciso "$1"
+  expect_equal "parse_utciso($1) return code" "$2" $?
+  expect_equal "parse_utciso($1) result" "$3" "$REPLY"
+}
+test_parse_utciso "1970-01-01T00:00:00Z" 0 0
+test_parse_utciso "2005-03-18T01:58:31Z" 0 1111111111
+test_parse_utciso "" 1
+test_parse_utciso "yesterday" 1
+
+###################################################################################################
+
+echo ""
+echo "Tests run: ${TEST_RUN} failed: ${TEST_FAIL}"

@@ -1,0 +1,297 @@
+#!/bin/bash
+# aws-session: Run a shell environment with AWS MFA credentials
+set -o pipefail
+
+function main() {
+  hash aws 2>/dev/null || fail 2 "Command 'aws' unavailable, ensure aws-cli is installed"
+  local usage="Usage: ${0##*/} [--profile PROFILE] [--session-duration SECONDS] [shell|exec]"
+
+  while [[ $# -gt 0 && "$1" =~ ^- ]]; do
+    case "$1" in
+      --profile)
+        optarg_required "$@"
+        export AWS_DEFAULT_PROFILE="$2"
+        shift 2
+        ;;
+      --session-duration)
+        optarg_required "$@"
+        [[ "$2" =~ ^[0-9]+$ ]] || fail 1 "Option $1 argument must be a number in seconds"
+        export AWS_SESSION_DURATION="$2"
+        shift 2
+        ;;
+      --debug) export AWS_SESSION_DEBUG=1; shift;;
+      --help) echo "$usage
+Options:
+  --profile PROFILE            set profile from ~/.aws, see AWS_DEFAULT_PROFILE
+  --session-duration SECONDS   requested session validity (default 12 hours)
+  --debug                      enable debug output
+  --help                       display this help text
+
+Commands:
+  shell                        run an interactive shell (default)
+  exec COMMAND [ARGS ...]      run the specified command
+
+Environment variables:
+  AWS_DEFAULT_PROFILE          default value for --profile
+  AWS_SESSION_DURATION         default value for --session-duration
+  AWS_SESSION_DEBUG            if set enables --debug
+  AWS_SESSION_COLOR            1/0 to enable/disable colored prompt"; exit 0;;
+      --) shift; break;;
+      *) fail 1 "$usage";;
+    esac
+  done
+
+  local cmd=shell; if [[ $# -gt 0 ]]; then cmd="$1"; shift; fi
+  case "$cmd" in
+    exec|shell|refresh) "session_${cmd}" "$@";;
+    *) fail 1 "$usage";;
+  esac
+}
+
+function session_exec() { # cmd args ...
+  [[ $# -ge 1 ]] || fail 1 "Usage: ${0##*/} exec COMMAND [ARGS...]"
+  establish_mfa_session || return $?
+  exec "$@"
+}
+
+function session_shell() {
+  [[ $# -eq 0 ]] || fail 1 "Usage: ${0##*/} shell"
+
+  # Export some information that our shell functions use
+  export AWS_SESSION; call AWS_SESSION=normalize "$0"
+  if [[ -z "$AWS_SESSION_COLOR" ]]; then
+    export AWS_SESSION_COLOR=0
+    local colors="$(tput colors 2>/dev/null)"
+    [[ -n "$colors" && "$colors" -ge 8 ]] && AWS_SESSION_COLOR=1
+  fi
+
+  # If AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY already come from the environment
+  # we need to preserve their values, as we will need them when we want to do a refresh.
+  if [[ -n "$AWS_ACCESS_KEY_ID" && -n "$AWS_SECRET_ACCESS_KEY" ]]; then
+    debug "Preserving AWS credentials from environment ($AWS_ACCESS_KEY_ID)"
+    export AWS_SESSION_PARENT_KEY="$AWS_ACCESS_KEY_ID"
+    export AWS_SESSION_PARENT_SECRET="$AWS_SECRET_ACCESS_KEY"
+    export AWS_SESSION_PARENT_TOKEN="${AWS_SESSION_TOKEN:-$AWS_SECURITY_TOKEN}"
+  else
+    unset AWS_SESSION_PARENT_{KEY,SECRET,TOKEN}
+  fi
+
+  establish_mfa_session || return $?
+
+  # Exec an interactive shell, with advanced support for bash and zsh
+  local shell="${SHELL##*/}"; [[ "$shell" != sh && "$SHELL" = "$BASH" ]] && shell=bash
+  case "$shell" in
+    bash)
+      # bash --rcfile lets us load custom bashrc. Note this doesn't work when running bash as 'sh'
+      exec "$SHELL" --rcfile <(generate_bashrc) -i
+      ;;
+    zsh)
+      # zsh doesn't have anything like '--rcfile', so we have to hook the entire ZDOTDIR
+      local dotdir="$HOME/.aws-session"
+      if ( umask 077 && mkdir -p "$dotdir" 2>/dev/null && generate_zdotdir "$dotdir" ); then
+        export AWS_SESSION_ZDOTREAL="${ZDOTDIR:-$HOME}"
+        export AWS_SESSION_ZDOTDIR="$dotdir" ZDOTDIR="$dotdir"
+      else
+        info "Warning: Unable to create ~/.aws-session, advanced zsh features will be unavailable"
+      fi
+      exec "$SHELL" -i
+      ;;
+    *)
+      info "Note: $SHELL does not appear to be a supported shell (bash, zsh), advanced features will be unavailable"
+      exec "$SHELL" -i
+      ;;
+  esac
+}
+
+function session_refresh() {
+  # Clear out the session credentials first, we need to use the original credentials to get
+  # the new token. Note that the AWS CLI doesn't like empty values in these variables; if a
+  # value doesn't apply it needs to be unset rather than just set to an empty string.
+  if [[ -n "$AWS_SESSION_PARENT_KEY" && -n "$AWS_SESSION_PARENT_SECRET" ]]; then
+    export AWS_ACCESS_KEY_ID="$AWS_SESSION_PARENT_KEY"
+    export AWS_SECRET_ACCESS_KEY="$AWS_SESSION_PARENT_SECRET"
+    if [[ -n "$AWS_SESSION_PARENT_TOKEN" ]]; then
+      export AWS_SESSION_TOKEN="$AWS_SESSION_PARENT_TOKEN"
+    else
+      unset AWS_SESSION_TOKEN
+    fi
+    debug "Restored AWS credentials in environment ($AWS_ACCESS_KEY_ID)"
+  else
+    unset AWS_{ACCESS_KEY_ID,SECRET_ACCESS_KEY,SESSION_TOKEN}
+  fi
+  unset AWS_SECURITY_TOKEN
+  establish_mfa_session || return $?
+
+  echo "export AWS_ACCESS_KEY_ID='$AWS_ACCESS_KEY_ID'
+export AWS_SECRET_ACCESS_KEY='$AWS_SECRET_ACCESS_KEY'
+export AWS_SESSION_TOKEN='$AWS_SESSION_TOKEN'
+export AWS_SESSION_EXPIRATION='$AWS_SESSION_EXPIRATION'
+export AWS_SECURITY_TOKEN=\"\$AWS_SESSION_TOKEN\" # legacy name"
+}
+
+function establish_mfa_session() {
+  local user mfa code opts=() expires
+  call user=aws_iam_username || return $?
+  debug "IAM username: $user"
+  call mfa=aws_iam_mfaarn "$user" || return $?
+  [[ -n "$mfa" ]] || fail 10 "IAM user '$user' has no MFA device configured"
+  debug "MFA device: $mfa"
+  call code=prompt_mfa_code || return $?
+
+  [[ "${AWS_SESSION_DURATION:-0}" -gt 0 ]] && opts+=(--duration-seconds "$AWS_SESSION_DURATION")
+  aws_query \
+      'Credentials.[AccessKeyId,SecretAccessKey,SessionToken,Expiration]' \
+      sts get-session-token --serial-number "$mfa" --token-code "$code" "${opts[@]}" || return $?
+  IFS=$'\t' read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN expires <<<"$REPLY"
+  call AWS_SESSION_EXPIRATION=parse_utciso "$expires" || oops "unable to parse iso datetime '$expires'"
+  debug "Session token expiration: $expires"
+
+  export AWS_{ACCESS_KEY_ID,SECRET_ACCESS_KEY,SESSION_TOKEN,SESSION_EXPIRATION}
+  export AWS_SECURITY_TOKEN="$AWS_SESSION_TOKEN" # legacy name
+}
+
+function prompt_mfa_code() { # ->REPLY
+  unset REPLY
+  until [[ "$REPLY" =~ ^[0-9]{6}$ ]]; do
+    [[ -n "$REPLY" ]] && info "Not a valid code: $REPLY"
+    read -re -p "Please enter your 6 digit MFA code: " || return $?
+  done
+}
+
+function aws_iam_username() { # ->REPLY
+  aws_query Arn sts get-caller-identity || return $?
+  if [[ "$REPLY" =~ ^arn:aws:iam::[0-9]+:user/(.*)$ ]]; then
+    REPLY="${BASH_REMATCH[1]}"
+  else
+    debug "ARN '$REPLY' is not an IAM user"
+    return 1
+  fi
+}
+
+function aws_iam_mfaarn() { # username ->REPLY
+  aws_query 'MFADevices[*].SerialNumber' iam list-mfa-devices --user-name "$1"
+}
+
+function aws_query { # query args... ->REPLY
+  REPLY="$(aws "${@:2}" --output text --query "$1")"
+}
+
+function aws() { # args ...
+  debug "+aws $*"
+  command aws "$@"
+}
+
+function debug() { # message
+  [[ "${AWS_SESSION_DEBUG:-0}" -le 0 ]] || info "$@"
+}
+
+
+function generate_common_rc() {
+  echo $'# aws-session / common
+function aws-session-valid() {
+  [[ "$(date +%s)" -lt "${AWS_SESSION_EXPIRATION:-0}" ]]
+}
+function aws-session-refresh() {
+  local env; env="$("${AWS_SESSION:-aws-session}" refresh)" || return $?; eval "$env"
+}
+function aws-session-prompt() {
+  # For bash we could just echo our pre-prompt (with -n), but in zsh the output
+  # would just get overwritten by the actual prompt. Modify PS1 instead.
+  if [[ "${PS1:0:4}" = "(aws" ]]; then # tedious but portable
+    local i=8 n="${#PS1}"
+    while [[ i < n && "${PS1:$i:1}" != ")" ]]; do let i++; done
+    while [[ i < n && "${PS1:$i:1}" != " " ]]; do let i++; done
+    let i++; PS1="${PS1:$i}"
+  fi
+  local exp sym=+ clr= rst=; (( exp = AWS_SESSION_EXPIRATION - $(date +%s) ))
+  [[ "${AWS_SESSION_COLOR:-0}" -gt 0 ]] && clr=$\'\\e[\'"$(( exp >= 300 ? 39 : exp >= 60 ? 33 : 31 ))m" rst=$\'\\e[39m\'
+  if (( exp >= 6000 )); then exp="$(( exp / 3600 ))h"
+  elif (( exp >= 100 )); then exp="$(( exp / 60 ))m"
+  elif (( exp > 0 )); then exp="${exp}s"
+  else exp=exp sym=\'!\'; fi
+  [[ "${#exp}" -ge 3 ]] || exp="0$exp"
+  PS1="(aws${sym}${clr}${exp}${rst}) $PS1"
+}
+function aws() {
+  aws-session-valid || aws-session-refresh && command aws "$@"
+}'
+}
+
+function generate_bashrc() {
+  generate_common_rc
+  echo $' # aws-session / bashrc
+[[ -f ~/.bashrc ]] && source ~/.bashrc
+PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND;}aws-session-prompt"'
+}
+
+function generate_zdotdir() { # dir
+  debug "Generating zsh environment in $1"
+  # See http://zsh.sourceforge.net/Doc/Release/Files.html#Startup_002fShutdown-Files
+  { echo -n $'# aws-session / zshenv
+if [ -f "$AWS_SESSION_ZDOTREAL/.zshenv" ]; then
+  ZDOTDIR="$AWS_SESSION_ZDOTREAL"
+  source "$ZDOTDIR/.zshenv"
+  ZDOTDIR="$AWS_SESSION_ZDOTDIR"
+fi
+'; } >"$1/.zshenv"
+  { generate_common_rc
+    echo -n $'# aws-session / zshrc
+precmd_functions+=(aws-session-prompt)
+
+if [ -f "$AWS_SESSION_ZDOTREAL/.zshrc" ]; then
+  ZDOTDIR="$AWS_SESSION_ZDOTREAL"
+  source "$ZDOTDIR/.zshrc"
+  ZDOTDIR="$AWS_SESSION_ZDOTDIR"
+fi
+'; } >"$1/.zshrc"
+}
+
+
+function parse_utciso() { # '%Y-%m-%dT%H:%M:%SZ' -> REPLY
+  # Validate format first, GNU date is very slack with what it accepts
+  REPLY=; [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+  REPLY="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$1" '+%s' 2>/dev/null)" \
+  || REPLY="$(date -u --date="$1" '+%s')"
+}
+
+function normalize() { # path ->REPLY
+  local dir base
+  call dir=dirnm "$1"
+  call base=basenm "$1"
+  REPLY="$(cd "$dir"; echo "$PWD")/$base"
+}
+
+function basenm() { # path ->REPLY
+  if [[ "$1" =~ ([^/]+)/*$ ]]; then REPLY="${BASH_REMATCH[1]}"
+  elif [[ "$1" =~ / ]]; then REPLY=/
+  else REPLY=; fi
+}
+
+function dirnm() { # path ->REPLY
+  if [[ "$1" =~ ^(.*[^/])/+[^/]+/*$ ]]; then REPLY="${BASH_REMATCH[1]}"
+  elif [[ "$1" =~ ^/ ]]; then REPLY=/
+  else  REPLY=.; fi
+}
+
+function optarg_required() { # "$@"
+  [[ $# -ge 2 && ! "$2" =~ ^- ]] || fail 1 "Option $1 requires an argument"
+}
+
+function oops() { # message
+  fail 99 "Internal error: $1"
+}
+
+function fail() { # code message 
+  echo "$2" >&2
+  exit "$1"
+}
+
+function info() { # message
+  echo "$1" >&2 || true
+}
+
+function call() { # var=func [args ...]
+  unset REPLY; "${1#*=}" "${@:2}"; eval "${1%%=*}=\$REPLY; return $?"
+}
+
+[[ "${BASH_SOURCE[0]}" = "$0" ]] && main "$@"
