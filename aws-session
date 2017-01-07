@@ -131,17 +131,24 @@ export AWS_SECURITY_TOKEN=\"\$AWS_SESSION_TOKEN\" # legacy name"
 
 function establish_mfa_session() {
   local user mfa code opts=() expires
-  call user=aws_iam_username || return $?
-  debug "IAM username: $user"
-  call mfa=aws_iam_mfaarn "$user" || return $?
-  [[ -n "$mfa" ]] || fail 10 "IAM user '$user' has no MFA device configured"
-  debug "MFA device: $mfa"
-  call code=prompt_mfa_code || return $?
 
+  if [[ -z "$AWS_SESSION_MFADEVICE" ]]; then
+    call user=aws_iam_username || return $?
+    debug "IAM username: $user"
+    call mfa=aws_iam_mfaarn "$user" || return $?
+    [[ -n "$mfa" ]] || fail 10 "IAM user '$user' has no MFA device configured"
+    export AWS_SESSION_MFADEVICE="$mfa" # retain for sub-shell refreshes
+    debug "MFA device: $mfa"
+  else
+    mfa="$AWS_SESSION_MFADEVICE"
+    debug "MFA device: $mfa (cached)"
+  fi
+
+  call code=prompt_mfa_code || return $?
   [[ "${AWS_SESSION_DURATION:-0}" -gt 0 ]] && opts+=(--duration-seconds "$AWS_SESSION_DURATION")
-  aws_query \
-      'Credentials.[AccessKeyId,SecretAccessKey,SessionToken,Expiration]' \
+  aws_query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken,Expiration]' \
       sts get-session-token --serial-number "$mfa" --token-code "$code" "${opts[@]}" || return $?
+
   IFS=$'\t' read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN expires <<<"$REPLY"
   call AWS_SESSION_EXPIRATION=parse_utciso "$expires" || oops "unable to parse iso datetime '$expires'"
   debug "Session token expiration: $expires"
