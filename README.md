@@ -2,7 +2,7 @@
 
 `aws-session` works in concert with the [Amazon AWS CLI](https://aws.amazon.com/cli/) to provide an interactive shell session in which temporary AWS credentials are available to other tools (including the AWS CLI itself). The primary use case for this is accessing AWS services through an IAM account that has [Multi-Factor Authentication](https://aws.amazon.com/iam/details/mfa/) enabled.
 
-In supported shells (`bash`, `zsh`) it also enhances the shell prompt to display the remaining life time of the temporary credentials, and overloads the `aws` command with a shell function that will refresh the credentials first if necessary before delegating to the actual AWS CLI.
+In supported shells (`bash`, `zsh`) it also enhances the shell prompt to display the remaining life time of the temporary credentials, and overloads the `aws` command with a shell function that will refresh the credentials first if necessary before delegating to the actual AWS CLI. A refresh can also be triggered manually via the shell function `aws-session-refresh`.
 
 ## Installation
 
@@ -22,9 +22,9 @@ The behavior of `aws-session` can be controlled by a number of command line opti
 
 ### Credentials and profile
 
-To use a different profile from `~/.aws/credentials`, pass `--profile PROFILE` or set `AWS_DEFAULT_PROFILE`. In either case the profile will passed into the sub-shell environment. Within the sub-shell the profile will generally only affect settings like default region and output format, as the temporary credentials themselves are provided directly via the environment variables listed above.
+To use a different profile from `~/.aws/credentials`, pass `--profile PROFILE` or set `AWS_DEFAULT_PROFILE`. In either case the profile will be passed into the sub-shell environment. Within the sub-shell the profile will generally only affect settings like the region and output format, as the temporary credentials themselves are provided directly via the environment variables listed above.
 
-Note that it is possible to supply the (non-MFA) access key and secret to `aws-session` itself in the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables, though this should rarely be needed. In the sub-shell these will be replaced with the temporary credentials obtained by `aws-session`, but a copy of these "parent" credentials will be stashed in the environment under a different name to enable `aws-session` to obtain new temporary credentials on demand.
+Note that it is possible to supply the (non-MFA) access key and secret to `aws-session` itself in the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables, though this should rarely be needed. In the sub-shell these will be replaced with the temporary credentials obtained by `aws-session`, but a copy of the "parent" credentials will be stashed in the environment under a different name to enable `aws-session` to obtain new temporary credentials on demand.
 
 ### Other options
 
