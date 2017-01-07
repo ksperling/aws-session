@@ -1,7 +1,5 @@
 # aws-session
 
-## Introduction
-
 `aws-session` works in concert with the [Amazon AWS CLI](https://aws.amazon.com/cli/) to provide an interactive shell session in which temporary AWS credentials are available to other tools (including the AWS CLI itself). The primary use case for this is accessing AWS services through an IAM account that has [Multi-Factor Authentication](https://aws.amazon.com/iam/details/mfa/) enabled.
 
 In supported shells (`bash`, `zsh`) it also enhances the shell prompt to display the remaining life time of the temporary credentials, and overloads the `aws` command with a shell function that will refresh the credentials first if necessary before delegating to the actual AWS CLI.
