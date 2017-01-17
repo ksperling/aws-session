@@ -34,7 +34,7 @@ Commands:
 Environment variables:
   AWS_DEFAULT_PROFILE          default value for --profile
   AWS_SESSION_DURATION         default value for --session-duration
-  AWS_SESSION_DEBUG            if set enables --debug
+  AWS_SESSION_DEBUG            1/0 default value for --debug
   AWS_SESSION_COLOR            1/0 to enable/disable colored prompt"; exit 0;;
       --) shift; break;;
       *) fail 1 "$usage";;
