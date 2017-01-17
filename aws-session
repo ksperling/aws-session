@@ -210,8 +210,11 @@ function aws-session-prompt() {
     while [[ i < n && "${PS1:$i:1}" != " " ]]; do let i++; done
     let i++; PS1="${PS1:$i}"
   fi
-  local exp sym=+ clr= rst=; (( exp = AWS_SESSION_EXPIRATION - $(date +%s) ))
-  [[ "${AWS_SESSION_COLOR:-0}" -gt 0 ]] && clr=$\'\\e[\'"$(( exp >= 300 ? 39 : exp >= 60 ? 33 : 31 ))m" rst=$\'\\e[39m\'
+  local exp sym=+ clr= rst= e=$\'\\e\'; (( exp = AWS_SESSION_EXPIRATION - $(date +%s) ))
+  if [[ "${AWS_SESSION_COLOR:-0}" -gt 0 ]]; then
+    clr="${e}[$(( exp >= 300 ? 39 : exp >= 60 ? 33 : 31 ))m" rst="${e}[39m"
+    [[ -n "$BASH_VERSION" ]] && clr="\\[$clr\\]" rst="\\[$rst\\]"
+  fi
   if (( exp >= 6000 )); then exp="$(( exp / 3600 ))h"
   elif (( exp >= 100 )); then exp="$(( exp / 60 ))m"
   elif (( exp > 0 )); then exp="${exp}s"
