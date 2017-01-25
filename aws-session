@@ -211,8 +211,8 @@ function aws-session-prompt() {
     let i++; PS1="${PS1:$i}"
   fi
   local exp sym=+ clr= rst= e=$\'\\e\'; (( exp = AWS_SESSION_EXPIRATION - $(date +%s) ))
-  if [[ "${AWS_SESSION_COLOR:-0}" -gt 0 ]]; then
-    clr="${e}[$(( exp >= 300 ? 39 : exp >= 60 ? 33 : 31 ))m" rst="${e}[39m"
+  if [[ "${AWS_SESSION_COLOR:-0}" -gt 0 && "$exp" -lt 300 ]]; then
+    clr="${e}[$(( exp >= 60 ? 33 : 31 ))m" rst="${e}[39m"
     [[ -n "$BASH_VERSION" ]] && clr="\\[$clr\\]" rst="\\[$rst\\]"
   fi
   if (( exp >= 6000 )); then exp="$(( exp / 3600 ))h"
