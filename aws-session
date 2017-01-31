@@ -202,6 +202,7 @@ function aws-session-refresh() {
   local env; env="$("${AWS_SESSION:-aws-session}" refresh)" || return $?; eval "$env"
 }
 function aws-session-prompt() {
+  local rc="$?" # preserve exit code for other prompt hooks
   # For bash we could just echo our pre-prompt (with -n), but in zsh the output
   # would just get overwritten by the actual prompt. Modify PS1 instead.
   if [[ "${PS1:0:4}" = "(aws" ]]; then # tedious but portable
@@ -221,6 +222,7 @@ function aws-session-prompt() {
   else exp=exp sym=\'!\'; fi
   [[ "${#exp}" -ge 3 ]] || exp="0$exp"
   PS1="(aws${sym}${clr}${exp}${rst}) $PS1"
+  return "$rc"
 }
 function aws() {
   aws-session-valid || aws-session-refresh && command aws "$@"
