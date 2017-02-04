@@ -1,16 +1,23 @@
 #!/bin/bash
+TEST_ROOT="$(dirname "$0")"
+TEST_FIXTURES="$TEST_ROOT/fixtures"
 
-TEST_RUN=0 TEST_FAIL=0
+TEST_TOTAL=0 TEST_FAIL=0 TEST_SKIP=0
+
 function test_record() { # message
   if [[ $? = 0 ]]; then
-    let TEST_RUN++
+    (( TEST_TOTAL++ ))
     echo -n .
   else
-    let TEST_RUN++
-    let TEST_FAIL++
-    echo .
-    echo "$1"
+    (( TEST_TOTAL++, TEST_FAIL++ ))
+    echo $'x\n'"$1"
   fi
+}
+
+function test_skip() { # count message
+  (( TEST_TOTAL += "$1", TEST_SKIP += "$1" ))
+  echo $'\n'"skipping $1 tests: $2"
+  return 1
 }
 
 function expect_equal() { # message expected actual
@@ -19,7 +26,7 @@ function expect_equal() { # message expected actual
 
 ###################################################################################################
 
-source "$(dirname "$0")/aws-session"
+source "$TEST_ROOT/aws-session"
 
 ### call
 
@@ -68,7 +75,37 @@ test_parse_utciso "2005-03-18T01:58:31Z" 0 1111111111
 test_parse_utciso "" 1
 test_parse_utciso "yesterday" 1
 
+### read_binary
+
+expect_equal "read_binary ..." "BC-F" "$(echo ABCDEFG | { read_binary 1 2 '1/1 "%c"'; echo -n "-"; read_binary 2 1 '1/1 "%c"'; })"
+
+### img_reorder_topdown
+
+expect_equal "img_reorder_topdown(0)" $'c\nb\na' "$(echo $'a\nb\nc' | img_reorder_topdown 0)"
+expect_equal "img_reorder_topdown(1)" $'a\nb\nc' "$(echo $'a\nb\nc' | img_reorder_topdown 1)"
+
+### img_scale_x
+
+expect_equal "img_scale_x(2)" 'abc' "$(echo 'aabbcc' | img_scale_x 2)"
+expect_equal "img_scale_x(3)" '# #' "$(echo '###   ###' | img_scale_x 3)"
+expect_equal "img_scale_x(3, 2)" '##  ##' "$(echo '###   ###' | img_scale_x 3 2)"
+
+### img_parse_png
+
+if have_cmd convert || test_skip 1 "convert (ImageMagic) unavailable"; then
+  expect_equal "img_parse_png_convert(3x3.png)" $'#  \n # \n## ' "$(img_parse_png <"$TEST_FIXTURES/3x3.png")"
+fi
+
+if have_cmd sips && [[ "$(uname -s)" = Darwin ]] || test_skip 1 "sips unavailable"; then
+  expect_equal "img_parse_png_sips(3x3.png)" $'#  \n # \n## ' "$(img_parse_png <"$TEST_FIXTURES/3x3.png")"
+fi
+
+### img_trim_qr
+
+expect_equal "img_trim_qr(qr.txt)" "$(cat "$TEST_FIXTURES/qr-trimmed.txt")" "$(img_trim_qr <"$TEST_FIXTURES/qr.txt")"
+
+
 ###################################################################################################
 
-echo ""
-echo "Tests run: ${TEST_RUN} failed: ${TEST_FAIL}"
+echo $'\n'"Total tests: ${TEST_TOTAL} skipped: ${TEST_SKIP} failed: ${TEST_FAIL}"
+[[ "$TEST_FAIL" -eq 0 ]]

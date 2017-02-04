@@ -26,6 +26,10 @@ To use a different profile from `~/.aws/credentials`, pass `--profile PROFILE` o
 
 Note that it is possible to supply the (non-MFA) access key and secret to `aws-session` itself in the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables, though this should rarely be needed. In the sub-shell these will be replaced with the temporary credentials obtained by `aws-session`, but a copy of the "parent" credentials will be stashed in the environment under a different name to enable `aws-session` to obtain new temporary credentials on demand.
 
+### MFA Activation
+
+Using the command `aws-session provision-mfa` a virtual MFA device can be created and activated from the command line. The QR Code used to seed the MFA device is rendered in the console itself. This is supported "out of the box" on OS X; on other platforms `convert` / ImageMagick must be installed. A [sample IAM Policy](#IAM-Policies) to allow users to provision their own MFA device via this command is provided below.
+
 ### Other options
 
 The desired validity period of the temporary credentials can be specified via the `--session-duration SECONDS` option or the `AWS_SESSION_DURATION` environment variable. The default is to lets AWS itself decide, and depends on the type of credentials being used. For an IAM user, the AWS default is 12 hours. For security reasons, a shorter duration (e.g. 1 or 2 hours) is recommended.
@@ -34,7 +38,7 @@ Debug output can be enabled via `--debug` or `AWS_SESSION_DEBUG=1`.
 
 Use of ANSI color codes in the dynamic shell prompt can be enabled or disabled via `AWS_SESSION_COLORS=0/1`, the default is to auto-detect color support via `tput colors`.
 
-## IAM Policy
+## IAM Policies
 
 The following IAM policy represents the minimal permissions required for a user to use temporary STS credentials via `aws-session`:
 
@@ -51,6 +55,23 @@ The following IAM policy represents the minimal permissions required for a user 
   }, {
     "Action": "sts:GetSessionToken",
     "Resource": "*",
+    "Condition": { "Bool": { "aws:SecureTransport": "true" } },
+    "Effect": "Allow"
+  } ]
+}
+```
+
+The following policy can be used to allow users to create a virtual MFA device for themselves using `aws-session provision-mfa`. Note that AWS itself prevents an MFA device from being deleted without deactivating it first. This policy intentionally only allows deletion but not deactivation.
+
+```
+{ "Version": "2012-10-17",
+  "Statement": [ {
+    "Action": "sts:GetCallerIdentity",
+    "Resource": "*",
+    "Effect": "Allow"
+  }, {
+    "Action": [ "iam:ListMfaDevices", "iam:CreateVirtualMfaDevice", "iam:DeleteVirtualMfaDevice", "iam:EnableMfaDevice" ],
+    "Resource": [ "arn:aws:iam::*:user/${aws:username}", "arn:aws:iam::*:mfa/${aws:username}" ],
     "Condition": { "Bool": { "aws:SecureTransport": "true" } },
     "Effect": "Allow"
   } ]

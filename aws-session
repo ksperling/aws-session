@@ -3,8 +3,8 @@
 set -o pipefail
 
 function main() {
-  hash aws 2>/dev/null || fail 2 "Command 'aws' unavailable, ensure aws-cli is installed"
-  local usage="Usage: ${0##*/} [--profile PROFILE] [--session-duration SECONDS] [shell|exec]"
+  have_cmd aws || fail 2 "Command 'aws' unavailable, ensure aws-cli is installed"
+  local usage="Usage: ${0##*/} [--profile PROFILE] [--session-duration SECONDS] [shell|exec|provision-mfa]"
 
   while [[ $# -gt 0 && "$1" =~ ^- ]]; do
     case "$1" in
@@ -30,6 +30,7 @@ Options:
 Commands:
   shell                        run an interactive shell (default)
   exec COMMAND [ARGS ...]      run the specified command
+  provision-mfa                configure a new virtual MFA device
 
 Environment variables:
   AWS_DEFAULT_PROFILE          default value for --profile
@@ -44,6 +45,7 @@ Environment variables:
   local cmd=shell; if [[ $# -gt 0 ]]; then cmd="$1"; shift; fi
   case "$cmd" in
     exec|shell|refresh) "session_${cmd}" "$@";;
+    provision-mfa) provision_mfa "$@";;
     *) fail 1 "$usage";;
   esac
 }
@@ -135,7 +137,7 @@ function establish_mfa_session() {
   if [[ -z "$AWS_SESSION_MFADEVICE" ]]; then
     call user=aws_iam_username || return $?
     debug "IAM username: $user"
-    call mfa=aws_iam_mfaarn "$user" || return $?
+    call mfa=aws_mfa_lookup "$user" || return $?
     [[ -n "$mfa" ]] || fail 10 "IAM user '$user' has no MFA device configured"
     export AWS_SESSION_MFADEVICE="$mfa" # retain for sub-shell refreshes
     debug "MFA device: $mfa"
@@ -157,12 +159,65 @@ function establish_mfa_session() {
   export AWS_SECURITY_TOKEN="$AWS_SESSION_TOKEN" # legacy name
 }
 
-function prompt_mfa_code() { # ->REPLY
+function provision_mfa() {
+  ( local user mfa code1 code2
+    call user=aws_iam_username || return $?
+    debug "IAM username: $user"
+    call mfa=aws_mfa_lookup "$user" || return $?
+    if [[ -n "$mfa" ]]; then
+      debug "MFA device: $mfa"
+      fail 10 "IAM user '$user' already has an MFA device configured"
+    fi
+
+    trap 'test -n "$mfa" && aws_mfa_delete "$mfa"; unset mfa' exit
+    call mfa=aws_mfa_create "$user" || return $?
+
+    info "Import the QR code into your authenticator app, then enter two consecutive codes"
+    call code1=prompt_mfa_code "the 1st"
+    call code2=prompt_mfa_code "the 2nd"
+
+    debug "Activating MFA device $mfa"
+    aws iam enable-mfa-device --user-name "$user" --serial-number "$mfa" \
+      --authentication-code-1 "$code1" --authentication-code-2 "$code2" || return $?
+
+    info "Virtual MFA device $mfa activated successfully for user '$user'"
+    unset mfa # activation successful, don't delete
+  )
+}
+
+function prompt_mfa_code() { # [description] ->REPLY
   unset REPLY
   until [[ "$REPLY" =~ ^[0-9]{6}$ ]]; do
     [[ -n "$REPLY" ]] && info "Not a valid code: $REPLY"
-    read -re -p "Please enter your 6 digit MFA code: " || return $?
+    read -re -p "Please enter ${1:-your} 6 digit MFA code: " || return $?
   done
+}
+
+function aws_mfa_create_internal() { # name
+  # The AWS CLI insists on writing the QR code PNG to a file, and check that the
+  # path refers to a writable directory. We want it to write to a pipe (fd 3)
+  # instead to avoid writing the MFA parameters to disk. We then swap FD 3<->1,
+  # pipe the PNG image through the rendering pipeline, and then swap the FDs back.
+  { ( local td="$(mktemp -d -t mfa)"; trap 'rm -rf -- "$td"' exit
+    ln -sf /dev/fd/3 "${td}/png" && aws iam create-virtual-mfa-device \
+      --virtual-mfa-device-name "$1" --bootstrap-method QRCodePNG --outfile "${td}/png" \
+      --output text --query VirtualMFADevice.SerialNumber
+  ) 4>&1 1>&3 3>&4 4>&- | img_png_qr_ansi; } 4>&1 1>&3 3>&4 4>&-  \
+  || return "${PIPESTATUS[0]}"
+}
+
+function aws_mfa_create() { # name ->REPLY
+  { REPLY="$(aws_mfa_create_internal "$1")"; } 3>&1 || return $?
+  debug "Created MFA device $REPLY"
+}
+
+function aws_mfa_delete() { # arn
+  debug "Deleting MFA device $1"
+  aws iam delete-virtual-mfa-device --serial "$1"
+}
+
+function aws_mfa_lookup() { # username ->REPLY
+  aws_query 'MFADevices[*].SerialNumber' iam list-mfa-devices --user-name "$1"
 }
 
 function aws_iam_username() { # ->REPLY
@@ -173,10 +228,6 @@ function aws_iam_username() { # ->REPLY
     debug "ARN '$REPLY' is not an IAM user"
     return 1
   fi
-}
-
-function aws_iam_mfaarn() { # username ->REPLY
-  aws_query 'MFADevices[*].SerialNumber' iam list-mfa-devices --user-name "$1"
 }
 
 function aws_query { # query args... ->REPLY
@@ -259,6 +310,114 @@ fi
 }
 
 
+function img_png_qr_ansi() {
+  img_parse_png | img_trim_qr | img_ansi
+}
+
+function img_trim_qr() {
+  # Skip leading blank lines and find the start of the positioning pattern. The
+  # positioning pattern is 7 modules wide (and high), this can be used to work
+  # out the scale of pixels per module. Finally scale down and trim to the minimum
+  # required quiet zone (4 modules)
+  read -r || return $? # no input
+  until [[ "$REPLY" =~ \# ]]; do read -r || break; done
+  if ! [[ "$REPLY" =~ ^(\ *)(\#+)(.*\#+)\ *$ ]]; then
+    echo "Invalid QR code" >&2
+    return 4
+  fi
+  local l1="${#BASH_REMATCH[1]}" l2="${#BASH_REMATCH[2]}" l3="${#BASH_REMATCH[3]}" ll="${#REPLY}"
+  local scale trim len; (( scale = l2 / 7, trim = l1 - 4*scale, len = l2 + l3 + 8*scale ))
+  if (( trim < 0 || trim + len > ll || len % scale != 0 )); then
+    echo "Invalid QR code" >&2
+    return 4
+  fi
+  { local quiet="$(printf "% ${len}s")" line=0
+    echo -e "${quiet}\n${quiet}\n${quiet}\n${quiet}"
+    while true; do
+      [[ "$REPLY" =~ \# ]] && (( line++ % scale == 0 )) && echo "${REPLY:$trim:$len}"
+      read -r || break
+    done
+    echo -e "${quiet}\n${quiet}\n${quiet}\n${quiet}"
+  } | img_scale_x "$scale" 2
+}
+
+function img_parse_png() {
+  if have_cmd convert; then
+    img_parse_png_convert
+  elif have_cmd sips && [[ "$(uname -s)" = Darwin ]]; then
+    img_parse_png_sips
+  else
+    echo "No PNG parser available, try installing ImageMagick" >&2
+    return 2
+  fi
+}
+
+function img_parse_png_convert() {
+  # Convert to uncompressed PBM (a text-based format) and post-process
+  convert png:- -compress none pbm:- 2>/dev/null | img_parse_pbm
+}
+
+function img_parse_png_sips() {
+  # OS X ships with an image conversion utility called 'sips'. Unfortunately
+  # it refuses to read/write pipes, so temporary files are used. The simplest
+  # output format supported by sips is BMP.
+  local td="$(mktemp -d -t sips)"; ( trap 'rm -rf -- "$td"' exit
+    cat >"${td}/i.png" \
+    && sips --setProperty format bmp "${td}/i.png" --out "${td}/o.bmp" >/dev/null \
+    && img_parse_bmp <"${td}/o.bmp"
+  )
+}
+
+function img_parse_pbm() {
+  local fmt iw ih b=; read -r fmt || return 7; read -r iw ih
+  if [[ "$fmt" = P1 && "$iw" -gt 0 && "$ih" -gt 0 ]]; then
+    tr -cd 01 | while read -n "$iw"; do echo "$REPLY"; done | tr 01 ' #'
+  else
+    echo "Unsupported PBM format ($fmt)" >&2
+    return 3
+  fi
+}
+
+function img_parse_bmp() {
+  if [[ "$(echo -n ABCD | hexdump -e '1/4 "%x"')" != "44434241" ]]; then
+    echo "BMP decoding is only supported on little-endian systems" >&2
+    return 2
+  fi
+  local b; b=($(read_binary 0 54 '1/2 "%u" 4/4 " %u" 2/4 " %d" 2/2 " %u" 6/4 " %u"')) || return $?
+  local magic ofs iw ih bcp bpp td=0; (( magic=b[0], ofs=b[3]-54, iw=b[5], ih=b[6], bcp=b[7], bpp=b[8] ))
+  (( ih < 0 )) && (( td = 1, ih = -ih )) # negative height indicates origin in upper-left corner
+  if (( magic == 19778 && bcp == 1 && bpp == 24 )); then # uncompressed RGB
+    local run pad len; (( run = iw*3, pad = (iw*4 - run) % 4, len = (run + pad) * ih )) # rows are padded to 4 bytes
+    read_binary "$ofs" "$len" "$run/1 \"%02x\" $pad/1 \"P\" \"\\n\"" | tr -d P | img_scale_x 6 | tr '0-9a-f' '# '
+  else
+    echo "Unsupported BMP format (${b[*]})" >&2
+    return 3
+  fi | img_reorder_topdown "$td"
+}
+
+function img_reorder_topdown() { # topdown
+  if [[ "$1" -gt 0 ]]; then cat; else sed '1!G;h;$!d'; fi
+}
+
+function img_scale_x() { # down [up]
+  local down="$1" up="${2:-1}" pat= repl=
+  while (( down-- > 1 )); do pat="${pat}."; done
+  while (( up-- > 0 )); do repl="${repl}\1"; done
+  sed "s/\(.\)${pat}/$repl/g"
+}
+
+function img_ansi() { 
+  # Render using ANSI background colors to avoid unwanted gaps between "pixels"
+  sed $'s/^/\e[47;107m/;s/\\(##*\\)/\e[40m\\1\e[47;107m/g;s/$/\e[0m/;y/#/ /'
+}
+
+
+function read_binary() { # skip bytes format
+  # 'hexdump' itself appears to use buffered I/O so will read more than the
+  # required number of bytes from stdin. Piping through 'dd' fixes this.
+  dd bs=1 skip="$1" count="$2" 2>/dev/null | hexdump -v -e "$3"
+}
+
 function parse_utciso() { # '%Y-%m-%dT%H:%M:%SZ' -> REPLY
   # Validate format first, GNU date is very slack with what it accepts
   REPLY=; [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
@@ -287,6 +446,10 @@ function dirnm() { # path ->REPLY
 
 function optarg_required() { # "$@"
   [[ $# -ge 2 && ! "$2" =~ ^- ]] || fail 1 "Option $1 requires an argument"
+}
+
+function have_cmd() { # command
+  hash "$1" 2>/dev/null
 }
 
 function oops() { # message
