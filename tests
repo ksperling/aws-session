@@ -31,6 +31,14 @@ function expect_not_equal() { # message unexpected actual
 
 source "./aws-session"
 
+echo "System information:"
+echo -n "- uname: " && uname -a
+have_cmd convert && echo -n "- convert: " && convert --version | head -1
+have_cmd sips && echo -n "- sips: " && sips --help | head -1
+
+
+###################################################################################################
+
 ### call
 
 function _reply_return() { REPLY="$1"; return $2; }
@@ -115,13 +123,19 @@ expect_equal "img_scale_x(2)" 'abc' "$(echo 'aabbcc' | img_scale_x 2)"
 expect_equal "img_scale_x(3)" '# #' "$(echo '###   ###' | img_scale_x 3)"
 expect_equal "img_scale_x(3, 2)" '##  ##' "$(echo '###   ###' | img_scale_x 3 2)"
 
+### img_parse_bmp
+
+expect_equal "img_parse_bmp(3x3-24-tdn.bmp)" $'#  \n # \n## ' "$(img_parse_bmp <fixtures/3x3-24-tdn.bmp)"
+expect_equal "img_parse_bmp(3x3-24-bup.bmp)" $'#  \n # \n## ' "$(img_parse_bmp <fixtures/3x3-24-bup.bmp)"
+expect_equal "img_parse_bmp(3x3-32-bup.bmp)" $'#  \n # \n## ' "$(img_parse_bmp <fixtures/3x3-32-bup.bmp)"
+
 ### img_parse_png
 
 if have_cmd convert || test_skip 1 "convert (ImageMagic) unavailable"; then
   expect_equal "img_parse_png_convert(3x3.png)" $'#  \n # \n## ' "$(img_parse_png_convert <fixtures/3x3.png)"
 fi
 
-if have_cmd sips && [[ "$(uname -s)" = Darwin ]] || test_skip 2 "sips unavailable"; then
+if have_cmd sips || test_skip 2 "sips unavailable"; then
   expect_equal "img_parse_png_sips(3x3.png)" $'#  \n # \n## ' "$(img_parse_png_sips <fixtures/3x3.png)"
 
   function mktemp() { return 100; }
