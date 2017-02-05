@@ -1,6 +1,5 @@
 #!/bin/bash
-TEST_ROOT="$(dirname "$0")"
-TEST_FIXTURES="$TEST_ROOT/fixtures"
+cd "$(dirname "$0")"
 
 TEST_TOTAL=0 TEST_FAIL=0 TEST_SKIP=0
 
@@ -21,12 +20,16 @@ function test_skip() { # count message
 }
 
 function expect_equal() { # message expected actual
-  [[ "$2" = "$3" ]]; test_record "$1: expected '$2' but got '$3'"
+  [[ "$3" = "$2" ]]; test_record "$1: expected '$2' but got '$3'"
+}
+
+function expect_not_equal() { # message unexpected actual
+  [[ "$3" != "$2" ]]; test_record "$1: unexpectedly got '$3'"
 }
 
 ###################################################################################################
 
-source "$TEST_ROOT/aws-session"
+source "./aws-session"
 
 ### call
 
@@ -63,6 +66,17 @@ for t in /aaa/bbb/  /  //  /aaa  aaa  aaa/  aaa/xxx  aaa//  a//b//c//  ''; do
   test_basename_dirname "$t"
 done
 
+### normalize
+
+function test_normalize() { # path expected
+  local actual rc; call actual=normalize "$1"; rc=$?
+  expect_equal "normalize($1) rc" 0 "$rc"
+  expect_equal "normalize($1)" "$2" "$actual"
+}
+
+test_normalize ./aws-session "$PWD/aws-session"
+test_normalize fixtures/../aws-session "$PWD/aws-session"
+
 ### parse_utciso
 
 function test_parse_utciso() {
@@ -93,16 +107,41 @@ expect_equal "img_scale_x(3, 2)" '##  ##' "$(echo '###   ###' | img_scale_x 3 2)
 ### img_parse_png
 
 if have_cmd convert || test_skip 1 "convert (ImageMagic) unavailable"; then
-  expect_equal "img_parse_png_convert(3x3.png)" $'#  \n # \n## ' "$(img_parse_png <"$TEST_FIXTURES/3x3.png")"
+  expect_equal "img_parse_png_convert(3x3.png)" $'#  \n # \n## ' "$(img_parse_png_convert <fixtures/3x3.png)"
 fi
 
-if have_cmd sips && [[ "$(uname -s)" = Darwin ]] || test_skip 1 "sips unavailable"; then
-  expect_equal "img_parse_png_sips(3x3.png)" $'#  \n # \n## ' "$(img_parse_png <"$TEST_FIXTURES/3x3.png")"
+if have_cmd sips && [[ "$(uname -s)" = Darwin ]] || test_skip 2 "sips unavailable"; then
+  expect_equal "img_parse_png_sips(3x3.png)" $'#  \n # \n## ' "$(img_parse_png_sips <fixtures/3x3.png)"
+
+  function mktemp() { return 100; }
+  img_parse_png_sips <fixtures/3x3.png >/dev/null
+  expect_equal "img_parse_png_sips rc [mktemp failure]" 100 $?
+  unset -f mktemp
 fi
 
 ### img_trim_qr
 
-expect_equal "img_trim_qr(qr.txt)" "$(cat "$TEST_FIXTURES/qr-trimmed.txt")" "$(img_trim_qr <"$TEST_FIXTURES/qr.txt")"
+expect_equal "img_trim_qr(qr.txt)" "$(cat fixtures/qr-trimmed.txt)" "$(img_trim_qr <fixtures/qr.txt)"
+
+### aws_mfa_create
+
+function aws() { # mock aws call
+  [[ "$1" = iam && "$2" = create-virtual-mfa-device ]] || return 100; shift 2
+  local outfile; while [[ $# -ge 2 ]]; do [[ "$1" = --outfile ]] && outfile="$2"; shift 2; done
+  [[ -n "$outfile" && -L "$outfile" ]] || return 101
+  cat fixtures/qr.png >"$outfile" && echo "mock-arn"
+}
+
+aws_mfa_create mock >/dev/null 2>/dev/null
+expect_equal "aws_mfa_create(mock) rc" 0 $?
+expect_equal "aws_mfa_create(mock) REPLY" mock-arn "$REPLY"
+expect_equal "aws_mfa_create(mock) output" "$(img_ansi <fixtures/qr-trimmed.txt)" "$(aws_mfa_create mock)"
+
+function mktemp() { return 100; }
+aws_mfa_create mock >/dev/null 2>/dev/null
+expect_equal "aws_mfa_create(mock) rc [mktemp failure]" 100 $?
+
+unset -f aws mktemp
 
 
 ###################################################################################################

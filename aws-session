@@ -62,9 +62,8 @@ function session_shell() {
   # Export some information that our shell functions use
   export AWS_SESSION; call AWS_SESSION=normalize "$0"
   if [[ -z "$AWS_SESSION_COLOR" ]]; then
-    export AWS_SESSION_COLOR=0
-    local colors="$(tput colors 2>/dev/null)"
-    [[ -n "$colors" && "$colors" -ge 8 ]] && AWS_SESSION_COLOR=1
+    export AWS_SESSION_COLOR=0; local colors
+    colors="$(tput colors 2>/dev/null)" && [[ "$colors" -ge 8 ]] && AWS_SESSION_COLOR=1
   fi
 
   # If AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY already come from the environment
@@ -198,12 +197,13 @@ function aws_mfa_create_internal() { # name
   # path refers to a writable directory. We want it to write to a pipe (fd 3)
   # instead to avoid writing the MFA parameters to disk. We then swap FD 3<->1,
   # pipe the PNG image through the rendering pipeline, and then swap the FDs back.
-  { ( local td="$(mktemp -d -t mfa)"; trap 'rm -rf -- "$td"' exit
-    ln -sf /dev/fd/3 "${td}/png" && aws iam create-virtual-mfa-device \
-      --virtual-mfa-device-name "$1" --bootstrap-method QRCodePNG --outfile "${td}/png" \
-      --output text --query VirtualMFADevice.SerialNumber
-  ) 4>&1 1>&3 3>&4 4>&- | img_png_qr_ansi; } 4>&1 1>&3 3>&4 4>&-  \
-  || return "${PIPESTATUS[0]}"
+  { ( td="$(mktemp -d -t mfa)" && \
+      trap 'rm -rf -- "$td"' exit && \
+      ln -sf /dev/fd/3 "${td}/png" && \
+      aws iam create-virtual-mfa-device \
+        --virtual-mfa-device-name "$1" --bootstrap-method QRCodePNG --outfile "${td}/png" \
+        --output text --query VirtualMFADevice.SerialNumber
+  ) 4>&1 1>&3 3>&4 4>&- | img_png_qr_ansi; } 4>&1 1>&3 3>&4 4>&- || return "${PIPESTATUS[0]}"
 }
 
 function aws_mfa_create() { # name ->REPLY
@@ -331,7 +331,8 @@ function img_trim_qr() {
     echo "Invalid QR code" >&2
     return 4
   fi
-  { local quiet="$(printf "% ${len}s")" line=0
+  { # shellcheck disable=SC2155
+    local quiet="$(printf "% ${len}s")" line=0
     echo -e "${quiet}\n${quiet}\n${quiet}\n${quiet}"
     while true; do
       [[ "$REPLY" =~ \# ]] && (( line++ % scale == 0 )) && echo "${REPLY:$trim:$len}"
@@ -361,17 +362,18 @@ function img_parse_png_sips() {
   # OS X ships with an image conversion utility called 'sips'. Unfortunately
   # it refuses to read/write pipes, so temporary files are used. The simplest
   # output format supported by sips is BMP.
-  local td="$(mktemp -d -t sips)"; ( trap 'rm -rf -- "$td"' exit
-    cat >"${td}/i.png" \
-    && sips --setProperty format bmp "${td}/i.png" --out "${td}/o.bmp" >/dev/null \
-    && img_parse_bmp <"${td}/o.bmp"
+  ( td="$(mktemp -d -t sips)" && \
+    trap 'rm -rf -- "$td"' exit && \
+    cat >"${td}/i.png" && \
+    sips --setProperty format bmp "${td}/i.png" --out "${td}/o.bmp" >/dev/null && \
+    img_parse_bmp <"${td}/o.bmp"
   )
 }
 
 function img_parse_pbm() {
   local fmt iw ih b=; read -r fmt || return 7; read -r iw ih
   if [[ "$fmt" = P1 && "$iw" -gt 0 && "$ih" -gt 0 ]]; then
-    tr -cd 01 | while read -n "$iw"; do echo "$REPLY"; done | tr 01 ' #'
+    tr -cd 01 | while IFS= read -rn "$iw"; do echo "$REPLY"; done | tr 01 ' #'
   else
     echo "Unsupported PBM format ($fmt)" >&2
     return 3
@@ -400,7 +402,7 @@ function img_reorder_topdown() { # topdown
 }
 
 function img_scale_x() { # down [up]
-  local down="$1" up="${2:-1}" pat= repl=
+  local down="$1" up="${2:-1}" pat="" repl=""
   while (( down-- > 1 )); do pat="${pat}."; done
   while (( up-- > 0 )); do repl="${repl}\1"; done
   sed "s/\(.\)${pat}/$repl/g"
@@ -429,7 +431,7 @@ function normalize() { # path ->REPLY
   local dir base
   call dir=dirnm "$1"
   call base=basenm "$1"
-  REPLY="$(cd "$dir"; echo "$PWD")/$base"
+  REPLY="$(cd "$dir" && echo "$PWD")/$base"
 }
 
 function basenm() { # path ->REPLY
