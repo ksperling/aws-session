@@ -386,19 +386,28 @@ function img_parse_bmp() {
     return 2
   fi
   local b; b=($(read_binary 0 54 '1/2 "%u" 4/4 " %u" 2/4 " %d" 2/2 " %u" 6/4 " %u"')) || return $?
-  local magic ofs iw ih bcp bpp cmp tdn=0; (( magic=b[0], ofs=b[3]-54, iw=b[5], ih=b[6], bcp=b[7], bpp=b[8], cmp=b[9] ))
+
+  # This would look tidier (( magic=b[0], ofs=b[3]-54, iw=b[5], ih=b[6], bcp=b[7], bpp=b[8], cmp=b[9] ))
+  # but triggers a segfault in bash 4.2: https://lists.gnu.org/archive/html/bug-bash/2016-02/msg00086.html
+  local magic="${b[0]}" ofs="$((b[3]-54))" iw="${b[5]}" ih="${b[6]}" bcp="${b[7]}" bpp="${b[8]}" cmp="${b[9]}" tdn=0
   (( ih < 0 )) && (( tdn = 1, ih = -ih )) # negative height indicates origin in upper-left corner
+
   if (( magic == 19778 && bcp == 1 && bpp == 24 && cmp == 0 )); then # uncompressed RGB
     local run pad len; (( run = iw*3, pad = (iw*4 - run) % 4, len = (run + pad) * ih )) # rows are padded to 4 bytes
-    read_binary "$ofs" "$len" "$run/1 \"%02x\" $pad/1 \"P\" \"\\n\"" | tr -d P | img_scale_x 6 | tr '0-9a-f' '# '
+    read_binary "$ofs" "$len" "$run/1 \"%02x\" $pad/1 \"P\" \"\\n\"" \
+    | tr -d P | img_scale_x 6 | tr '0-9a-f' '# ' | img_reorder_topdown "$tdn"
+
   elif (( magic == 19778 && bcp == 1 && bpp == 32 && ( cmp == 0 || cmp == 3) )); then # uncompressed/bitfields RGBA
-    # Note that we're reading each pixel as 4 bytes rather than 1 dword so that the hexdump output is in
-    # RGBA format so that img_scale_x will use the R channel (dword would result in ARGB -> A being used).
-    read_binary "$ofs" $((iw*ih*4)) "$((iw*4))/1 \"%02x\" \"\\n\"" | img_scale_x 8 | tr '0-9a-f' '# '
+    # Note that this just assumes RGBA format rather than actually looking at the bit masks in the header.
+    # Also note that we're reading each pixel as 4 bytes rather than 1 dword so that the hexdump output is in RGBA
+    # order, so that img_scale_x will use the R channel -- reading as a dword would result in ARGB -> A being used).
+    read_binary "$ofs" $((iw*ih*4)) "$((iw*4))/1 \"%02x\" \"\\n\"" \
+    | img_scale_x 8 | tr '0-9a-f' '# ' | img_reorder_topdown "$tdn"
+
   else
     info "Unsupported BMP format (${b[*]})"
     return 3
-  fi | img_reorder_topdown "$tdn"
+  fi
 }
 
 function img_reorder_topdown() { # topdown
@@ -424,8 +433,9 @@ function read_binary() { # skip bytes format
   # bs=1 gets inefficient very quickly, so read as much as possible using
   # a large block size, and handle the remainder and byte-based skipping
   # separately.
-  { local bs=4096 blk rem; (( blk = $2 / bs, rem = $2 % bs ))
-    dd bs=1 skip="$1" count="$rem" 2>/dev/null && dd bs="$bs" count="$blk" 2>/dev/null
+  { local bs=512 blk rem; (( blk = $2 / bs, rem = $2 % bs ))
+    { [[ "$1" == 0 && "$rem" == 0 ]] || dd bs=1 skip="$1" count="$rem" 2>/dev/null; } && \
+    { [[ "$blk" == 0 ]] || dd bs="$bs" count="$blk" 2>/dev/null; }
   } | hexdump -v -e "$3"
 }
 
