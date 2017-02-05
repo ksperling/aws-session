@@ -77,6 +77,17 @@ function test_normalize() { # path expected
 test_normalize ./aws-session "$PWD/aws-session"
 test_normalize fixtures/../aws-session "$PWD/aws-session"
 
+### mktmpdir
+
+mktmpdir test
+expect_equal "mktmpdir rc" 0 $?
+[[ -d "$REPLY" ]]; test_record "mktmpdir did not return a directory"
+
+function mktemp() { return 100; }
+mktmpdir test
+expect_equal "mktmpdir rc [mktemp failure]" 100 $?
+unset -f mktemp
+
 ### parse_utciso
 
 function test_parse_utciso() {
