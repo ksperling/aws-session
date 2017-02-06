@@ -1,6 +1,7 @@
 # aws-session
 
 [![Build Status](https://travis-ci.org/ksperling/aws-session.svg?branch=master)](https://travis-ci.org/ksperling/aws-session)
+[![Code Climate](https://codeclimate.com/github/ksperling/aws-session/badges/gpa.svg)](https://codeclimate.com/github/ksperling/aws-session)
 
 ## Overview
 
