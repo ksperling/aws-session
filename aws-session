@@ -197,7 +197,7 @@ function aws_mfa_create_internal() { # name
   # path refers to a writable directory. We want it to write to a pipe (fd 3)
   # instead to avoid writing the MFA parameters to disk. We then swap FD 3<->1,
   # pipe the PNG image through the rendering pipeline, and then swap the FDs back.
-  { ( call td=mktmpdir mfa && \
+  { ( local td; call td=mktmpdir mfa && \
       trap 'rm -rf -- "$td"' exit && \
       ln -sf /dev/fd/3 "${td}/png" && \
       aws iam create-virtual-mfa-device \
@@ -362,7 +362,7 @@ function img_parse_png_sips() {
   # OS X ships with an image conversion utility called 'sips'. Unfortunately
   # it refuses to read/write pipes, so temporary files are used. The simplest
   # output format supported by sips is BMP.
-  ( call td=mktmpdir sips && \
+  ( local td; call td=mktmpdir sips && \
     trap 'rm -rf -- "$td"' exit && \
     cat >"${td}/i.png" && \
     sips --setProperty format bmp "${td}/i.png" --out "${td}/o.bmp" >/dev/null && \
