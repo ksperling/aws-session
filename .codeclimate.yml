@@ -1,0 +1,11 @@
+---
+engines:
+  fixme:
+    enabled: true
+  shellcheck:
+    enabled: true
+ratings:
+  paths:
+    - "aws-session"
+exclude_paths:
+  - "tests"
