@@ -12,7 +12,7 @@ In supported shells (`bash`, `zsh`) it also enhances the shell prompt to display
 
 Before using `aws-session`, you must have the [AWS CLI](https://aws.amazon.com/cli/) installed (through whatever [method](http://docs.aws.amazon.com/cli/latest/userguide/installing.html) you choose) on your PATH and configured (through `aws configure` or manually).
 
-`aws-session` itself is a stand-alone shell script, just download the file and place it somewhere on your PATH, e.g. in `/usr/local/bin`.
+`aws-session` itself is a stand-alone shell script, just [download the script](https://raw.githubusercontent.com/ksperling/aws-session/master/aws-session) and place it somewhere on your PATH, e.g. in `/usr/local/bin`.
 
 ## Usage
 
