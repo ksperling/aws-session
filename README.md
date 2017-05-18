@@ -1,5 +1,7 @@
 # aws-session
 
+Manage shell sessions with temporary AWS credentials
+
 [![Build Status](https://travis-ci.org/ksperling/aws-session.svg?branch=master)](https://travis-ci.org/ksperling/aws-session)
 [![Code Climate](https://codeclimate.com/github/ksperling/aws-session/badges/gpa.svg)](https://codeclimate.com/github/ksperling/aws-session)
 
@@ -11,9 +13,11 @@ In supported shells (`bash`, `zsh`) it also enhances the shell prompt to display
 
 ## Installation
 
-Before using `aws-session`, you must have the [AWS CLI](https://aws.amazon.com/cli/) installed (through whatever [method](http://docs.aws.amazon.com/cli/latest/userguide/installing.html) you choose) on your PATH and configured (through `aws configure` or manually).
+On OS X, the easiest way to install `aws-session` is via [Homebrew](https://brew.sh/): `brew install ksperling/tap/aws-session`.
 
-`aws-session` itself is a stand-alone shell script, just [download the script](https://raw.githubusercontent.com/ksperling/aws-session/master/aws-session) and place it somewhere on your PATH, e.g. in `/usr/local/bin`.
+Otherwise a manual install is straightforward: just [download the script](https://raw.githubusercontent.com/ksperling/aws-session/master/aws-session) and place it somewhere on your PATH, e.g. in `/usr/local/bin`.
+
+Before using `aws-session`, you must have the [AWS CLI](https://aws.amazon.com/cli/) installed (through whatever [method](http://docs.aws.amazon.com/cli/latest/userguide/installing.html) you choose) on your PATH and configured (through `aws configure` or manually).
 
 ## Usage
 

@@ -1,5 +1,6 @@
 #!/bin/bash
 # aws-session: Run a shell environment with AWS MFA credentials
+version=HEAD
 set -o pipefail
 
 function main() {
@@ -20,11 +21,13 @@ function main() {
         shift 2
         ;;
       --debug) export AWS_SESSION_DEBUG=1; shift;;
+      --version) version; exit 0;;
       --help) echo "$usage
 Options:
   --profile PROFILE            set profile from ~/.aws, see AWS_DEFAULT_PROFILE
   --session-duration SECONDS   requested session validity (default 12 hours)
   --debug                      enable debug output
+  --version                    display version information
   --help                       display this help text
 
 Commands:
@@ -48,6 +51,19 @@ Environment variables:
     provision-mfa) provision_mfa "$@";;
     *) fail 1 "$usage";;
   esac
+}
+
+function version() {
+  local cli="$(command aws --version 2>&1)"
+  if [[ "$cli" =~ ^aws-cli/([0-9]+)\.([0-9]+)\. ]]; then
+    echo "aws-session/${version} ${cli}"
+    local maj="${BASH_REMATCH[1]}" min="${BASH_REMATCH[2]}"
+    if [[ "$maj" -lt 1 || "$maj" -eq 1 && "$min" -lt 11 ]]; then
+      info "Warning: aws-session may not work correctly with aws-cli < 1.11"
+    fi
+  else
+    echo "aws-session/${version} aws-cli/unknown"
+  fi
 }
 
 function session_exec() { # cmd args ...
