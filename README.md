@@ -41,6 +41,8 @@ Using the command `aws-session provision-mfa` a virtual MFA device can be create
 
 ### Other options
 
+The MFA token code for shell, exec, and refresh action can be set directly via the `--code CODE` option or the `AWS_SESSION_MFA_CODE` environment variable.
+
 The desired validity period of the temporary credentials can be specified via the `--session-duration SECONDS` option or the `AWS_SESSION_DURATION` environment variable. The default is to lets AWS itself decide, and depends on the type of credentials being used. For an IAM user, the AWS default is 12 hours. For security reasons, a shorter duration (e.g. 1 or 2 hours) is recommended.
 
 Debug output can be enabled via `--debug` or `AWS_SESSION_DEBUG=1`.

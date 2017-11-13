@@ -5,7 +5,7 @@ set -o pipefail
 
 function main() {
   have_cmd aws || fail 2 "Command 'aws' unavailable, ensure aws-cli is installed"
-  local usage="Usage: ${0##*/} [--profile PROFILE] [--session-duration SECONDS] [shell|exec|provision-mfa]"
+  local usage="Usage: ${0##*/} [--profile PROFILE] [--code CODE] [--session-duration SECONDS] [shell|exec|provision-mfa]"
 
   while [[ $# -gt 0 && "$1" =~ ^- ]]; do
     case "$1" in
@@ -20,11 +20,17 @@ function main() {
         export AWS_SESSION_DURATION="$2"
         shift 2
         ;;
+      --code)
+        optarg_required "$@"
+        export AWS_SESSION_MFA_CODE="$2"
+        shift 2
+        ;;
       --debug) export AWS_SESSION_DEBUG=1; shift;;
       --version) version; exit 0;;
       --help) echo "$usage
 Options:
   --profile PROFILE            set profile from ~/.aws, see AWS_DEFAULT_PROFILE
+  --code CODE                  set the MFA code directly (non-interactive)
   --session-duration SECONDS   requested session validity (default 12 hours)
   --debug                      enable debug output
   --version                    display version information
@@ -37,6 +43,7 @@ Commands:
 
 Environment variables:
   AWS_DEFAULT_PROFILE          default value for --profile
+  AWS_SESSION_MFA_CODE         default value for --code
   AWS_SESSION_DURATION         default value for --session-duration
   AWS_SESSION_DEBUG            1/0 default value for --debug
   AWS_SESSION_COLOR            1/0 to enable/disable colored prompt"; exit 0;;
@@ -161,7 +168,13 @@ function establish_mfa_session() {
     debug "MFA device: $mfa (cached)"
   fi
 
-  call code=prompt_mfa_code || return $?
+  if [ -z "$AWS_SESSION_MFA_CODE" ]; then
+    call code=prompt_mfa_code || return $?
+  else
+    code="$AWS_SESSION_MFA_CODE"
+    unset AWS_SESSION_MFA_CODE
+  fi
+
   [[ "${AWS_SESSION_DURATION:-0}" -gt 0 ]] && opts+=(--duration-seconds "$AWS_SESSION_DURATION")
   aws_query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken,Expiration]' \
       sts get-session-token --serial-number "$mfa" --token-code "$code" "${opts[@]}" || return $?
