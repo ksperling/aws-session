@@ -279,7 +279,7 @@ function aws-session-valid() {
   [[ "$(date +%s)" -lt "${AWS_SESSION_EXPIRATION:-0}" ]]
 }
 function aws-session-refresh() {
-  local env; env="$("${AWS_SESSION:-aws-session}" refresh)" || return $?; eval "$env"
+  local env; env="$("${AWS_SESSION:-aws-session}" "$@" refresh)" || return $?; eval "$env"
 }
 function aws-session-prompt() {
   local rc="$?" # preserve exit code for other prompt hooks
