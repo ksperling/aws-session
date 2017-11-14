@@ -71,7 +71,7 @@ function test_basename_dirname() {
   expect_equal "dirname '$1' rc" "$expected_rc" "$actual_rc"
 }
 
-for t in /aaa/bbb/  /  //  /aaa  aaa  aaa/  aaa/xxx  aaa//  a//b//c//  ''; do
+for t in /aaa/bbb/  /  //  /aaa  aaa  aaa/  aaa/xxx  aaa//  a//b//c//  ' a // b // c //'  ''; do
   test_basename_dirname "$t"
 done
 
