@@ -1,11 +1,8 @@
----
-engines:
+version: "2"
+plugins:
   fixme:
     enabled: true
   shellcheck:
     enabled: true
-ratings:
-  paths:
-    - "aws-session"
-exclude_paths:
-  - "tests"
+exclude_patterns:
+  - "tests/"
